@@ -16,15 +16,15 @@ def sin_embed(x):
     return eo.rearrange(t, "... d i -> ... (d i)")
 
 
-class SWIGlu(nn.Module):
+class SwiGlu(nn.Module):
     dim: int
 
     @nn.compact
     def __call__(self, x: Array) -> Array:
         x_dim = x.shape[-1]
-        x1 = nn.Dense(self.dim)(x)
-        x2 = nn.Dense(self.dim)(x)
-        return nn.Dense(x_dim)(nn.silu(x1) * x2)
+        x1 = nn.Dense(self.dim, use_bias=False)(x)
+        x2 = nn.Dense(self.dim, use_bias=False)(x)
+        return nn.Dense(x_dim, use_bias=False)(nn.silu(x1) * x2)
 
 
 class TransformerBlock(nn.Module):
@@ -32,16 +32,12 @@ class TransformerBlock(nn.Module):
 
     @nn.compact
     def __call__(self, x: Array) -> Array:
-        skip = x
-        x = nn.attention.MultiHeadAttention(self.n_heads)(x, x, x)
-        # x = GroupedQuaryAttention(x.shape[-1], self.n_heads, self.n_heads)(x)
-        x += skip
-        x = nn.RMSNorm()(x)
+        x = nn.RMSNorm(1e-5)(
+            x + nn.attention.MultiHeadAttention(self.n_heads, use_bias=False)(x, x, x)
+        )
 
-        skip = x
-        x = SWIGlu(x.shape[-1] * 8 // 3)(x)
-        x += skip
-        return nn.RMSNorm()(x)
+        x = nn.RMSNorm(1e-5)(x + SwiGlu(x.shape[-1] * 3)(x))
+        return x
 
 
 class Transformer(nn.Module):
