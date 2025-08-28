@@ -1,21 +1,21 @@
 [train]
 train_batch_size = 384 # 768
-batch_size = 100
+batch_size = 101
 steps = 20000 #20000
 val_freq = 200
 halt_exploration_prob = 0.1 # 0.1
 warmup_retio = 0.1 # 0.1
-# lr = 0.00007 # 0.0001
-# wd = 1
-lr = 0.0005
-wd = 0.1
+lr = 0.00007 # 0.0001
+wd = 1
+# lr = 0.0005
+# wd = 0.1
 m_max = 16 # 16
 
 [model]
-# dim = 512 # 512
-# n_heads = 8 # 8 - min(2, dim / 64)
-dim = 128 # 512
-n_heads = 2 # 8 - min(2, dim / 64)
+dim = 512 # 512
+n_heads = 8 # 8 - min(2, dim / 64)
+# dim = 128 # 512
+# n_heads = 2 # 8 - min(2, dim / 64)
 num_emb = 10
 n_blocks = 4 # 4
 h_freqs = [2, 2] # [2, 2]
