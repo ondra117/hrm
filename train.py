@@ -1,15 +1,19 @@
 import os
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+# os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.95"
 
 import rich.traceback
 
 rich.traceback.install()
 
+import jax
+
+# jax.config.update("jax_disable_jit", True)
+# jax.config.update("jax_debug_nans", True)
+
 from pathlib import Path
 import optax
-import jax
 import numpy as np
 import flax.linen as nn
 from flax.training.train_state import TrainState
