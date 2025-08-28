@@ -19,15 +19,15 @@ class DataLoader(base_data_loader.DataLoader):
         disable_warnings=False,
     ):
         self.config = config
-        # data_path = Path().joinpath(
-        #     "data", "sudoku-extreme-1k-aug-1000", "test" if val else "train"
-        # )
         data_path = Path().joinpath(
-            "data", "sudoku-extreme-full", "test" if val else "train"
+            "data", "sudoku-extreme-1k-aug-1000", "test" if val else "train"
         )
+        # data_path = Path().joinpath(
+        #     "data", "sudoku-extreme-full", "test" if val else "train"
+        # )
 
-        # data_len = 1010 if val else 422786
-        data_len = 1000 if val else 1000
+        data_len = 1010 if val else 422786
+        # data_len = 1000 if val else 1000
 
         with open(data_path.joinpath("all__inputs.npy"), "rb") as f:
             self.inputs = eo.rearrange(
@@ -57,7 +57,7 @@ class DataLoader(base_data_loader.DataLoader):
 
     def get_batch(self, idx):
         def augment(inp):
-            # return inp
+            return inp
             s = np.arange(1, 10, dtype=np.uint8)
             trans = choice(
                 [[], [0], [0, 1], [0, 1, 0], [0, 1, 0, 1], [1, 0, 1], [1, 0], [1]]
