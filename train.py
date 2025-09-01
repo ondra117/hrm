@@ -43,16 +43,16 @@ data_loader = DataLoader(config)
 val_data_loader = DataLoader(config, val=True)
 data_loader.start()
 
-lr_scheduler = optax.schedules.warmup_cosine_decay_schedule(
-    0,
-    config.train.lr,
-    config.train.steps * config.train.warmup_retio,
-    config.train.steps - (config.train.steps * config.train.warmup_retio),
-)
-# lr_scheduler = optax.schedules.warmup_constant_schedule(
-#     0, config.train.lr, config.train.steps * config.train.warmup_retio
+# lr_scheduler = optax.schedules.warmup_cosine_decay_schedule(
+#     0,
+#     config.train.lr,
+#     config.train.steps * config.train.warmup_retio,
+#     config.train.steps - (config.train.steps * config.train.warmup_retio),
 # )
-optax.adamw
+lr_scheduler = optax.schedules.warmup_constant_schedule(
+    0, config.train.lr, config.train.steps * config.train.warmup_retio
+)
+
 opt = optax.chain(
     optax.clip_by_global_norm(1),
     adamatan2(lr_scheduler, b2=0.95, weight_decay=config.train.wd),
@@ -75,16 +75,19 @@ y = np.zeros(
     dtype=np.uint8,
 )
 
-z_orig = lacum_normal(
-    np.random.uniform(
-        0, 1, (len(data_loader.get_batch(0)[0][0]) + 1, config.model.dim)
-    ),
-    2,
-)
+z_orig = [
+    lacum_normal(
+        np.random.uniform(
+            0, 1, (len(data_loader.get_batch(0)[0][0]) + 1, config.model.dim)
+        ),
+        2,
+    )
+    for _ in range(len(config.model.h_freqs))
+]
 
 z = [
     np.zeros(
-        (config.train.train_batch_size, *z_orig.shape),
+        (config.train.train_batch_size, *z_orig[0].shape),
         dtype=np.float32,
     )
     for _ in range(len(config.model.h_freqs))
@@ -159,9 +162,9 @@ while trainstate.step[0] <= config.train.steps:
                     zs.at[idx].set(
                         # np.clip(np.random.normal(0, 1, size=zs.shape[1:]), -3, 3)
                         # lacum_normal(np.random.uniform(0, 1, size=zs.shape[1:]), 2)
-                        z_orig
+                        zo
                     )
-                    for zs in z
+                    for zs, zo in zip(z, z_orig)
                 ]
                 m = m.at[idx].set(0)
                 q = q.at[idx].set(0)
@@ -202,6 +205,7 @@ while trainstate.step[0] <= config.train.steps:
         acc = 0
         acc_full = 0
         n_acc = 0
+        m_mean = 0
 
         for _ in tqdm(range(len(val_data_loader) * 2)):
             loader_batch_x, loader_batch_y = next(val_data_loader)
@@ -214,6 +218,7 @@ while trainstate.step[0] <= config.train.steps:
                     idx = np.argmax((mv == config.train.m_max) | (qv[:, 0] > qv[:, 1]))
 
                     if y_predv is not None:
+                        m_mean += int(mv[idx])
                         mask = xv[idx] == 0
                         y_predv_row = jnp.argmax(
                             eo.rearrange(y_predv, "d b ... -> (d b) ...")[idx], axis=-1
@@ -233,9 +238,9 @@ while trainstate.step[0] <= config.train.steps:
                         zvs.at[idx].set(
                             # np.clip(np.random.normal(0, 1, size=zvs.shape[1:]), -3, 3)
                             # lacum_normal(np.random.uniform(0, 1, size=zvs.shape[1:]), 2)
-                            z_orig
+                            zo
                         )
-                        for zvs in zv
+                        for zvs, zo in zip(zv, z_orig)
                     ]
                     mv = mv.at[idx].set(0)
                     qv = qv.at[idx].set(0)
@@ -244,7 +249,11 @@ while trainstate.step[0] <= config.train.steps:
                 y_predv, zv, qv = model_apply({"params": trainstate.params}, xv, zv)
                 mv += 1
         run.log(
-            {"val_acc": acc / n_acc, "val_acc_full": acc_full / n_acc},
+            {
+                "val_acc": acc / n_acc,
+                "val_acc_full": acc_full / n_acc,
+                "m": m_mean / n_acc,
+            },
             step=trainstate.step[0],
         )
         print(f"val_acc: {acc / n_acc}\nval_acc_full: {acc_full / n_acc}")
