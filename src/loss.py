@@ -1,5 +1,6 @@
 import flax.linen as nn
 import jax.numpy as jnp
+import optax
 
 
 def sigmoid_binary_cross_entropy(logits, labels):
@@ -17,14 +18,7 @@ def sigmoid_binary_cross_entropy(logits, labels):
 
 def stabelmax(logits, labels):
     loglogits = jnp.log(jnp.abs(logits) + 1) * jnp.where(logits < 0, -1, 1)
-    return jnp.sum(
-        jnp.where(
-            nn.one_hot(labels, logits.shape[-1]),
-            -loglogits + nn.logsumexp(loglogits, axis=-1, keepdims=True),
-            0,
-        ),
-        axis=-1,
-    )
+    return optax.softmax_cross_entropy_with_integer_labels(loglogits, labels)
 
 
 def hrm_loss(y_pred, x, y_true, q, q_next, m, m_max):
