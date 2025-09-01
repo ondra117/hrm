@@ -25,7 +25,7 @@ def train_step(
         return loss, (y_pred, q, z)
 
     (loss, (y_pred, q, z)), grads = jax.value_and_grad(step_fn, has_aux=True)(
-        state.params, state, x, z, y, m, n_max
+        state.params, state, x, z, y, m + 1, n_max
     )
     grads = jax.lax.pmean(grads, axis_name="devices")
     state = state.apply_gradients(grads=grads)
