@@ -1,9 +1,34 @@
 from flax.typing import Array
+from jax._src import dtypes, core, random
 import flax.linen as nn
 import numpy as np
 import jax
 import jax.numpy as jnp
 import einops as eo
+
+
+def hrm_init(
+    dtype=dtypes.float_,
+    lower=-2.0,
+    upper=2.0,
+) -> nn.initializers.Initializer:
+    def init(
+        key: Array,
+        shape: core.Shape,
+        dtype=dtype,
+        out_sharding=None,
+    ) -> Array:
+        dtype = dtypes.canonicalize_dtype(dtype)
+        return random.truncated_normal(
+            key,
+            lower * jnp.sqrt(shape[-1]),
+            upper * jnp.sqrt(shape[-1]),
+            shape,
+            dtype,
+            out_sharding=out_sharding,
+        ) * jnp.array(1 / jnp.sqrt(shape[-1]), dtype)
+
+    return init
 
 
 def sin_embed(x):
@@ -22,9 +47,9 @@ class SwiGlu(nn.Module):
     @nn.compact
     def __call__(self, x: Array) -> Array:
         x_dim = x.shape[-1]
-        x1 = nn.Dense(self.dim, use_bias=False)(x)
-        x2 = nn.Dense(self.dim, use_bias=False)(x)
-        return nn.Dense(x_dim, use_bias=False)(nn.silu(x1) * x2)
+        x1 = nn.Dense(self.dim, use_bias=False, kernel_init=hrm_init())(x)
+        x2 = nn.Dense(self.dim, use_bias=False, kernel_init=hrm_init())(x)
+        return nn.Dense(x_dim, use_bias=False, kernel_init=hrm_init())(nn.silu(x1) * x2)
 
 
 class TransformerBlock(nn.Module):
@@ -32,11 +57,14 @@ class TransformerBlock(nn.Module):
 
     @nn.compact
     def __call__(self, x: Array) -> Array:
-        x = nn.RMSNorm(1e-5)(
-            x + nn.attention.MultiHeadAttention(self.n_heads, use_bias=False)(x, x, x)
+        x = nn.RMSNorm(1e-5, use_scale=False)(
+            x
+            + nn.attention.MultiHeadAttention(
+                self.n_heads, use_bias=False, kernel_init=hrm_init()
+            )(x, x, x)
         )
 
-        x = nn.RMSNorm(1e-5)(x + SwiGlu(x.shape[-1] * 3)(x))
+        x = nn.RMSNorm(1e-5, use_scale=False)(x + SwiGlu(x.shape[-1] * 3)(x))
         return x
 
 
@@ -90,17 +118,26 @@ class HRM(nn.Module):
 
     @nn.compact
     def __call__(self, x: Array, z: list[Array]) -> tuple[Array, list[Array], Array]:
-        embed = nn.Embed(self.num_emb, self.dim)
+        embed = nn.Embed(
+            self.num_emb,
+            self.dim,
+            embedding_init=nn.initializers.truncated_normal(1 / jnp.sqrt(self.dim)),
+        )
         x = embed(x)
         # x += sin_embed(x)
-        x += self.param("time_embed", lambda *_: sin_embed(x), sin_embed(x).shape)
+        x += self.param(
+            "time_embed",
+            nn.initializers.truncated_normal(1 / jnp.sqrt(self.dim)),
+            (x.shape[-2], x.shape[-1]),
+        )
+        x /= jnp.sqrt(2)
 
         x = jnp.concat(
             [
                 x,
                 eo.repeat(
                     self.param(
-                        "q_token", nn.initializers.truncated_normal(1), (1, x.shape[-1])
+                        "q_token", nn.initializers.zeros_init(), (1, x.shape[-1])
                     ),
                     "... -> b ...",
                     b=x.shape[0],
@@ -114,7 +151,9 @@ class HRM(nn.Module):
         zs = z[-1]
 
         # out = embed.attend(zs)
-        out = nn.Dense(self.num_emb)(zs[..., :-1, :])
+        out = nn.Dense(self.num_emb, use_bias=False, kernel_init=hrm_init())(
+            zs[..., :-1, :]
+        )
 
         q = nn.Dense(
             2,
