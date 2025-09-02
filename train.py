@@ -53,9 +53,10 @@ lr_scheduler = optax.schedules.warmup_constant_schedule(
     0, config.train.lr, config.train.steps * config.train.warmup_retio
 )
 
+
 opt = optax.chain(
     optax.clip_by_global_norm(1),
-    adamatan2(lr_scheduler, b2=0.95, weight_decay=config.train.wd),
+    optax.adamw(lr_scheduler, b2=0.95, weight_decay=config.train.wd),
 )
 
 module = HRM(
