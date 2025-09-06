@@ -1,30 +1,47 @@
 from pydantic import BaseModel
 import toml
+import jax.numpy as jnp
 
 
-class Train(BaseModel):
-    train_batch_size: int
-    batch_size: int
-    steps: int
-    val_freq: int
+class Arch(BaseModel):
+    loss_type: str
+
     halt_exploration_prob: float
-    warmup_retio: float
-    lr: float
-    m_max: int
-    wd: float
+    halt_max_steps: int
 
+    H_cycles: int
+    L_cycles: int
 
-class Model(BaseModel):
-    dim: int
-    num_emb: int
-    n_heads: int
-    n_blocks: int
-    h_freqs: list[int]
+    H_layers: int
+    L_layers: int
+
+    hidden_size: int
+    num_heads: int
+    expansion: int
+
+    puzzle_emb_ndim: int
+
+    pos_encodings: str
 
 
 class Config(BaseModel):
-    train: Train
-    model: Model
+    arch: Arch
+
+    seed: int
+
+    data_path: str
+
+    global_batch_size: int
+
+    epochs: int
+    eval_interval: int
+
+    lr: float
+    lr_warmup_steps: int
+
+    beta1: float
+    beta2: float
+    weight_decay: float
 
 
 def load_config(path):

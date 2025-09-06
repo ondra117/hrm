@@ -13,7 +13,12 @@ dependencies = [
     "pydantic>=2.11.7",
     "rich>=14.1.0",
     "scipy>=1.16.1",
+    "tb-nightly>=2.21.0a20250904",
+    "tensorboard>=2.20.0",
+    "tensorflow>=2.20.0",
     "toml>=0.10.2",
     "tqdm>=4.67.1",
     "wandb>=0.21.1",
+    "xprof-nightly>=2.21.6a20250903",
+    "xprof>=2.20.6",
 ]

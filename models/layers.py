@@ -4,6 +4,7 @@ import jax.numpy as jnp
 from models.common import trunc_normal_init_
 import einops as eo
 import jax
+import math
 
 
 def _find_multiple(a, b):
@@ -14,7 +15,7 @@ def rotate_half(x: Array):
     """Rotates half the hidden dims of the input."""
     x1 = x[..., : x.shape[-1] // 2]
     x2 = x[..., x.shape[-1] // 2 :]
-    return jnp.concat([-x2, x1], dim=-1)
+    return jnp.concat([-x2, x1], axis=-1)
 
 
 def apply_rotary_pos_emb(
@@ -26,8 +27,8 @@ def apply_rotary_pos_emb(
     q = q.astype(cos.dtype)
     k = k.astype(cos.dtype)
 
-    q_embed = (q * cos[..., None, :, :]) + (rotate_half(q) * sin[..., None, :, :])
-    k_embed = (k * cos[..., None, :, :]) + (rotate_half(k) * sin[..., None, :, :])
+    q_embed = (q * cos[..., None, :]) + (rotate_half(q) * sin[..., None, :])
+    k_embed = (k * cos[..., None, :]) + (rotate_half(k) * sin[..., None, :])
 
     return q_embed.astype(orig_dtype), k_embed.astype(orig_dtype)
 
@@ -36,17 +37,25 @@ class CastedLinear(nn.Module):
     in_features: int
     out_features: int
     use_bias: bool
+    weights_init: nn.initializers.Initializer | None = None
+    bias_init: nn.initializers.Initializer | None = None
 
     def setup(self):
         self.weights = self.param(
             "w",
-            trunc_normal_init_(std=1 / (self.in_features**0.5)),
+            trunc_normal_init_(std=1 / (self.in_features**0.5))
+            if self.weights_init is None
+            else self.weights_init,
             (self.out_features, self.in_features),
         )
         self.bias = 0
         if self.use_bias:
             self.bias = self.param(
-                "b", nn.initializers.zeros_init(), (self.out_features,)
+                "b",
+                nn.initializers.zeros_init()
+                if self.bias_init is None
+                else self.bias_init,
+                (self.out_features,),
             )
 
     def __call__(self, input: Array) -> Array:
@@ -60,7 +69,7 @@ class CastedEmbedding(nn.Module):
     num_embeddings: int
     embedding_dim: int
     init_std: float
-    cast_to: jnp.dtype
+    cast_to: jnp.dtype = jnp.float32
 
     def setup(self):
         self.weights = self.param(
@@ -69,8 +78,11 @@ class CastedEmbedding(nn.Module):
             (self.num_embeddings, self.embedding_dim),
         )
 
+    def embedding_weight(self):
+        return self.weights
+
     def __call__(self, input: Array) -> Array:
-        self.weights.astype(self.cast_to)[input]
+        return self.weights.astype(self.cast_to)[input]
 
 
 class RotaryEmbedding(nn.Module):
@@ -136,15 +148,14 @@ class SwiGLU(nn.Module):
     expansion: float
 
     def setup(self):
-        inter = _find_multiple(
-            jnp.round(self.expansion * self.hidden_size * 2 / 3), 256
-        )
+        # inter = _find_multiple(round(self.expansion * self.hidden_size * 2 / 3), 256)
+        inter = math.ceil(self.expansion * 2 / 3) * self.hidden_size
 
         self.gate_up_proj = CastedLinear(self.hidden_size, inter * 2, use_bias=False)
         self.down_proj = CastedLinear(inter, self.hidden_size, use_bias=False)
 
     def __call__(self, x):
-        gate, up = jnp.split(self.gate_up_proj(x), 2)
+        gate, up = jnp.split(self.gate_up_proj(x), 2, axis=-1)
         return self.down_proj(nn.silu(gate) * up)
 
 
