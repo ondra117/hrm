@@ -37,72 +37,128 @@ def softmax_cross_entropy(logits, labels) -> Array:
     return optax.softmax_cross_entropy_with_integer_labels(logits, labels)
 
 
-class ACTLossHead(nn.Module):
-    model: HierarchicalReasoningModel_ACTV1
-    loss_fn: callable
+def act_loss(
+    new_carry, outputs
+) -> tuple[Array, Array, dict[str, Array], dict[str, Array] | None, Array]:
+    labels = new_carry.current_data["labels"]
 
-    def setup(self):
-        pass
+    mask = labels != IGNORE_LABEL_ID
+    loss_counts = jnp.sum(mask, axis=-1)
+    loss_divisor = jnp.maximum(loss_counts, 1)[..., None]
 
-    def init_model(self, batch: Array, **kwargs):
-        return self(carry=self.initial_carry(batch=batch), batch=batch, **kwargs)
+    is_correct = mask & (jnp.argmax(outputs["logits"], axis=-1) == labels)
+    seq_is_correct = jnp.sum(is_correct, axis=-1) == loss_counts
 
-    def initial_carry(self, *args, **kwargs):
-        return self.model.initial_carry(*args, **kwargs)
+    valid_metrics = new_carry.halted & (loss_counts > 0)
+    metrics = {
+        "count": valid_metrics.sum(),
+        "accuracy": jnp.where(
+            valid_metrics,
+            jnp.sum(is_correct.astype(jnp.float32) / loss_divisor, axis=-1),
+            0,
+        ).sum(),
+        "exact_accuracy": (valid_metrics & seq_is_correct).sum(),
+        "q_halt_accuracy": (
+            valid_metrics & ((outputs["q_halt_logits"] >= 0) == seq_is_correct)
+        ).sum(),
+        "steps": jnp.where(valid_metrics, new_carry.steps, 0).sum(),
+    }
 
-    def __call__(
-        self, **model_kwargs
-    ) -> tuple[Array, Array, dict[str, Array], dict[str, Array] | None, Array]:
-        new_carry, outputs = self.model(**model_kwargs)
-        labels = new_carry.current_data["labels"]
-
-        mask = labels != IGNORE_LABEL_ID
-        loss_counts = jnp.sum(mask, axis=-1)
-        loss_divisor = jnp.maximum(loss_counts, 1)[..., None]
-
-        is_correct = mask & (jnp.argmax(outputs["logits"], axis=-1) == labels)
-        seq_is_correct = jnp.sum(is_correct, axis=-1) == loss_counts
-
-        valid_metrics = new_carry.halted & (loss_counts > 0)
-        metrics = {
-            "count": valid_metrics.sum(),
-            "accuracy": jnp.where(
-                valid_metrics,
-                jnp.sum(is_correct.astype(jnp.float32) / loss_divisor, axis=-1),
-                0,
-            ).sum(),
-            "exact_accuracy": (valid_metrics & seq_is_correct).sum(),
-            "q_halt_accuracy": (
-                valid_metrics & ((outputs["q_halt_logits"] >= 0) == seq_is_correct)
-            ).sum(),
-            "steps": jnp.where(valid_metrics, new_carry.steps, 0).sum(),
-        }
-
-        lm_loss = (self.loss_fn(outputs["logits"], labels) / loss_divisor).sum()
-        q_halt_loss = jnp.sum(
-            optax.sigmoid_binary_cross_entropy(
-                outputs["q_halt_logits"],
-                seq_is_correct.astype(outputs["q_halt_logits"].dtype),
-            )
+    lm_loss = (stablemax_cross_entropy(outputs["logits"], labels) / loss_divisor).sum()
+    q_halt_loss = jnp.sum(
+        optax.sigmoid_binary_cross_entropy(
+            outputs["q_halt_logits"],
+            seq_is_correct.astype(outputs["q_halt_logits"].dtype),
         )
+    )
 
-        metrics["lm_loss"] = jax.lax.stop_gradient(lm_loss)
-        metrics["q_halt_loss"] = jax.lax.stop_gradient(q_halt_loss)
+    metrics["lm_loss"] = jax.lax.stop_gradient(lm_loss)
+    metrics["q_halt_loss"] = jax.lax.stop_gradient(q_halt_loss)
 
-        q_continue_loss = jnp.sum(
-            optax.sigmoid_binary_cross_entropy(
-                outputs["q_continue_logits"], outputs["target_q_continue"]
-            )
+    q_continue_loss = jnp.sum(
+        optax.sigmoid_binary_cross_entropy(
+            outputs["q_continue_logits"], outputs["target_q_continue"]
         )
+    )
 
-        metrics["q_continue_loss"] = jax.lax.stop_gradient(q_continue_loss)
+    metrics["q_continue_loss"] = jax.lax.stop_gradient(q_continue_loss)
 
-        outputs = jax.tree.map(jax.lax.stop_gradient, outputs)
+    outputs = jax.tree.map(jax.lax.stop_gradient, outputs)
 
-        return (
-            new_carry,
-            lm_loss + 0.5 * (q_halt_loss + q_continue_loss),
-            metrics,
-            outputs,
-            new_carry.halted.all(),
-        )
+    return (
+        new_carry,
+        lm_loss + 0.5 * (q_halt_loss + q_continue_loss),
+        metrics,
+        outputs,
+        new_carry.halted.all(),
+    )
+
+
+# class ACTLossHead(nn.Module):
+#     model: HierarchicalReasoningModel_ACTV1
+#     loss_fn: callable
+
+#     def setup(self):
+#         pass
+
+#     def init_model(self, batch: Array, **kwargs):
+#         return self(carry=self.initial_carry(batch=batch), batch=batch, **kwargs)
+
+#     def initial_carry(self, *args, **kwargs):
+#         return self.model.initial_carry(*args, **kwargs)
+
+#     def __call__(
+#         self, new_carry, outputs
+#     ) -> tuple[Array, Array, dict[str, Array], dict[str, Array] | None, Array]:
+#         labels = new_carry.current_data["labels"]
+
+#         mask = labels != IGNORE_LABEL_ID
+#         loss_counts = jnp.sum(mask, axis=-1)
+#         loss_divisor = jnp.maximum(loss_counts, 1)[..., None]
+
+#         is_correct = mask & (jnp.argmax(outputs["logits"], axis=-1) == labels)
+#         seq_is_correct = jnp.sum(is_correct, axis=-1) == loss_counts
+
+#         valid_metrics = new_carry.halted & (loss_counts > 0)
+#         metrics = {
+#             "count": valid_metrics.sum(),
+#             "accuracy": jnp.where(
+#                 valid_metrics,
+#                 jnp.sum(is_correct.astype(jnp.float32) / loss_divisor, axis=-1),
+#                 0,
+#             ).sum(),
+#             "exact_accuracy": (valid_metrics & seq_is_correct).sum(),
+#             "q_halt_accuracy": (
+#                 valid_metrics & ((outputs["q_halt_logits"] >= 0) == seq_is_correct)
+#             ).sum(),
+#             "steps": jnp.where(valid_metrics, new_carry.steps, 0).sum(),
+#         }
+
+#         lm_loss = (self.loss_fn(outputs["logits"], labels) / loss_divisor).sum()
+#         q_halt_loss = jnp.sum(
+#             optax.sigmoid_binary_cross_entropy(
+#                 outputs["q_halt_logits"],
+#                 seq_is_correct.astype(outputs["q_halt_logits"].dtype),
+#             )
+#         )
+
+#         metrics["lm_loss"] = jax.lax.stop_gradient(lm_loss)
+#         metrics["q_halt_loss"] = jax.lax.stop_gradient(q_halt_loss)
+
+#         q_continue_loss = jnp.sum(
+#             optax.sigmoid_binary_cross_entropy(
+#                 outputs["q_continue_logits"], outputs["target_q_continue"]
+#             )
+#         )
+
+#         metrics["q_continue_loss"] = jax.lax.stop_gradient(q_continue_loss)
+
+#         outputs = jax.tree.map(jax.lax.stop_gradient, outputs)
+
+#         return (
+#             new_carry,
+#             lm_loss + 0.5 * (q_halt_loss + q_continue_loss),
+#             metrics,
+#             outputs,
+#             new_carry.halted.all(),
+#         )

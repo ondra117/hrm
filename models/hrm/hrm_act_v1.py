@@ -299,6 +299,9 @@ class HierarchicalReasoningModel_ACTV1(nn.Module):
     def puzzle_emb(self) -> Array:
         return self.inner.get_puzzle_emb()
 
+    def init_model(self, batch: Array, **kwargs):
+        return self(carry=self.initial_carry(batch=batch), batch=batch, **kwargs)
+
     def initial_carry(
         self, batch: dict[str, Array]
     ) -> HierarchicalReasoningModel_ACTV1Carry:

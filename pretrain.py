@@ -29,7 +29,7 @@ from models.hrm.hrm_act_v1 import (
     HierarchicalReasoningModel_ACTV1Config,
     HierarchicalReasoningModel_ACTV1Carry,
 )
-from models.losses import ACTLossHead, stablemax_cross_entropy
+from models.losses import act_loss
 from adam_atan2 import adamatan2
 from config import Config, load_config
 
@@ -78,9 +78,7 @@ def create_model(config: Config, train_metadata: PuzzleDatasetMetadata):
         )
     )
 
-    model = ACTLossHead(
-        HierarchicalReasoningModel_ACTV1(model_cfg), stablemax_cross_entropy
-    )
+    model = HierarchicalReasoningModel_ACTV1(model_cfg)
 
     lr_scheduler = optax.schedules.warmup_cosine_decay_schedule(
         0,
@@ -106,7 +104,10 @@ def init_train_state(
     model, opt, lr_scheduler = create_model(config, train_metadata)
 
     vars = model.init(
-        jax.random.PRNGKey(0), batch=batch, key=key, method=ACTLossHead.init_model
+        jax.random.PRNGKey(0),
+        batch=batch,
+        key=key,
+        method=HierarchicalReasoningModel_ACTV1.init_model,
     )
 
     return TrainState.create(
@@ -117,14 +118,20 @@ def init_train_state(
     ), lr_scheduler
 
 
+def model_and_loss(train_state, *args, **kwargs):
+    return act_loss(*train_state.apply_fn(*args, **kwargs))
+
+
 def train_step(train_state, carry, batch, global_batch_size, key):
     def _step(params, train_state, carry, batch, global_batch_size, key):
-        carry, loss, metrics, _, _ = train_state.apply_fn(
+        carry, loss, metrics, _, _ = model_and_loss(
+            train_state,
             {"params": params, "constants": train_state.constants},
             carry=carry,
             batch=batch,
             key=key,
         )
+
         loss /= global_batch_size
 
         return loss, (carry, metrics)
@@ -163,7 +170,7 @@ def train_batch(
             lambda *args, **kwargs: train_state.apply_fn(
                 *args,
                 **kwargs,
-                method=ACTLossHead.initial_carry,
+                method=HierarchicalReasoningModel_ACTV1.initial_carry,
             ),
             axis_name="devices",
         )(
@@ -197,7 +204,7 @@ def evaluate(
     eval_metadata: PuzzleDatasetMetadata,
     key: Array,
 ):
-    apply_fn = jax.pmap(train_state.apply_fn, axis_name="devices")
+    apply_fn = jax.pmap(model_and_loss, axis_name="devices")
     set_ids = {k: idx for idx, k in enumerate(eval_metadata.sets)}
 
     # all_preds = {}
@@ -213,7 +220,7 @@ def evaluate(
             lambda *args, **kwargs: train_state.apply_fn(
                 *args,
                 **kwargs,
-                method=ACTLossHead.initial_carry,
+                method=HierarchicalReasoningModel_ACTV1.initial_carry,
             ),
             axis_name="devices",
         )(
@@ -224,6 +231,7 @@ def evaluate(
         while True:
             key, sub_key = jax.random.split(key)
             carry, _, metrics, preds, all_finish = apply_fn(
+                train_state,
                 {"params": train_state.params, "constants": train_state.constants},
                 carry=carry,
                 batch=batch,
