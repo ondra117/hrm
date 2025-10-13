@@ -19,18 +19,14 @@ def log_stablemax(x: Array, axis: int = -1) -> Array:
     return jnp.log(s_x / jnp.sum(s_x, axis=axis, keepdims=True))
 
 
-def stablemax_cross_entropy(
-    logits: Array, labels: Array, ignore_index: int = -100
-) -> Array:
+def stablemax_cross_entropy(logits: Array, labels: Array) -> Array:
     logprobs = log_stablemax(logits.astype(jnp.float64), axis=-1)
 
-    valid_mask = labels != ignore_index
-    transformed_labels = jnp.where(valid_mask, labels, 0)
     prediction_logprobs = jnp.take_along_axis(
-        logprobs, indices=transformed_labels.astype(jnp.uint64)[..., None], axis=-1
+        logprobs, indices=labels.astype(jnp.uint64)[..., None], axis=-1
     )[..., 0]
 
-    return -jnp.where(valid_mask, prediction_logprobs, 0)
+    return -prediction_logprobs
 
 
 def softmax_cross_entropy(logits, labels) -> Array:
@@ -42,19 +38,29 @@ def act_loss(
 ) -> tuple[Array, Array, dict[str, Array], dict[str, Array] | None, Array]:
     labels = new_carry.current_data["labels"]
 
-    mask = labels != IGNORE_LABEL_ID
-    loss_counts = jnp.sum(mask, axis=-1)
-    loss_divisor = jnp.maximum(loss_counts, 1)[..., None]
+    is_correct = jnp.argmax(outputs["logits"], axis=-1) == labels
+    seq_is_correct = jnp.all(is_correct, axis=-1)
 
-    is_correct = mask & (jnp.argmax(outputs["logits"], axis=-1) == labels)
-    seq_is_correct = jnp.sum(is_correct, axis=-1) == loss_counts
+    lm_loss = jnp.mean(stablemax_cross_entropy(outputs["logits"], labels))
+    q_halt_loss = jnp.mean(
+        optax.sigmoid_binary_cross_entropy(
+            outputs["q_halt_logits"],
+            seq_is_correct.astype(outputs["q_halt_logits"].dtype),
+        )
+    )
 
-    valid_metrics = new_carry.halted & (loss_counts > 0)
+    q_continue_loss = jnp.mean(
+        optax.sigmoid_binary_cross_entropy(
+            outputs["q_continue_logits"], outputs["target_q_continue"]
+        )
+    )
+
+    valid_metrics = new_carry.halted
     metrics = {
         "count": valid_metrics.sum(),
         "accuracy": jnp.where(
             valid_metrics,
-            jnp.sum(is_correct.astype(jnp.float32) / loss_divisor, axis=-1),
+            jnp.mean(is_correct.astype(jnp.float32), axis=-1),
             0,
         ).sum(),
         "exact_accuracy": (valid_metrics & seq_is_correct).sum(),
@@ -62,28 +68,10 @@ def act_loss(
             valid_metrics & ((outputs["q_halt_logits"] >= 0) == seq_is_correct)
         ).sum(),
         "steps": jnp.where(valid_metrics, new_carry.steps, 0).sum(),
+        "lm_loss": lm_loss,
+        "q_halt_loss": q_halt_loss,
+        "q_continue_loss": q_continue_loss,
     }
-
-    lm_loss = (stablemax_cross_entropy(outputs["logits"], labels) / loss_divisor).sum()
-    q_halt_loss = jnp.sum(
-        optax.sigmoid_binary_cross_entropy(
-            outputs["q_halt_logits"],
-            seq_is_correct.astype(outputs["q_halt_logits"].dtype),
-        )
-    )
-
-    metrics["lm_loss"] = jax.lax.stop_gradient(lm_loss)
-    metrics["q_halt_loss"] = jax.lax.stop_gradient(q_halt_loss)
-
-    q_continue_loss = jnp.sum(
-        optax.sigmoid_binary_cross_entropy(
-            outputs["q_continue_logits"], outputs["target_q_continue"]
-        )
-    )
-
-    metrics["q_continue_loss"] = jax.lax.stop_gradient(q_continue_loss)
-
-    outputs = jax.tree.map(jax.lax.stop_gradient, outputs)
 
     return (
         new_carry,

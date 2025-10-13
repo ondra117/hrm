@@ -131,16 +131,13 @@ def train_step(train_state, carry, batch, global_batch_size, key):
             batch=batch,
             key=key,
         )
-
-        loss /= global_batch_size
-
         return loss, (carry, metrics)
 
     (loss, (carry, metrics)), grads = jax.value_and_grad(_step, has_aux=True)(
         train_state.params, train_state, carry, batch, global_batch_size, key
     )
 
-    grads = jax.lax.psum(grads, axis_name="devices")
+    grads = jax.lax.pmean(grads, axis_name="devices")
     train_state = train_state.apply_gradients(grads=grads)
 
     return train_state, carry, metrics, loss
