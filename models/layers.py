@@ -166,3 +166,9 @@ def rms_norm(hidden_states: Array, variance_epsilon: float) -> Array:
     variance = jnp.mean(hidden_states**2, axis=-1, keepdims=True)
     hidden_states *= jax.lax.rsqrt(variance + variance_epsilon)
     return hidden_states.astype(input_dtype)
+
+
+# logits = jnp.log(1 + jnp.abs(jnp.where(logits == 0, 1e-30, logits))) * jnp.where(
+#         logits < 0, -1, 1
+#     )
+#     return optax.softmax_cross_entropy_with_integer_labels(logits, labels)

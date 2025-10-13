@@ -20,6 +20,11 @@ def log_stablemax(x: Array, axis: int = -1) -> Array:
 
 
 def stablemax_cross_entropy(logits: Array, labels: Array) -> Array:
+    logits = jnp.log(1 + jnp.abs(jnp.where(logits == 0, 1e-30, logits))) * jnp.where(
+        logits < 0, -1, 1
+    )
+    return optax.softmax_cross_entropy_with_integer_labels(logits, labels)
+
     logprobs = log_stablemax(logits.astype(jnp.float64), axis=-1)
 
     prediction_logprobs = jnp.take_along_axis(
@@ -58,7 +63,6 @@ def act_loss(
     valid_metrics = new_carry.halted
     count = valid_metrics.sum()
     metrics = {
-        "count": count,
         "accuracy": jnp.where(
             valid_metrics,
             jnp.mean(is_correct.astype(jnp.float32), axis=-1),
