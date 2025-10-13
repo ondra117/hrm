@@ -63,18 +63,17 @@ def act_loss(
     valid_metrics = new_carry.halted
     count = valid_metrics.sum()
     metrics = {
+        "count": count,
         "accuracy": jnp.where(
             valid_metrics,
             jnp.mean(is_correct.astype(jnp.float32), axis=-1),
             0,
-        ).sum()
-        / count,
-        "exact_accuracy": (valid_metrics & seq_is_correct).sum() / count,
+        ).sum(),
+        "exact_accuracy": (valid_metrics & seq_is_correct).sum(),
         "q_halt_accuracy": (
             valid_metrics & ((outputs["q_halt_logits"] >= 0) == seq_is_correct)
-        ).sum()
-        / count,
-        "steps": jnp.where(valid_metrics, new_carry.steps, 0).sum() / count,
+        ).sum(),
+        "steps": jnp.where(valid_metrics, new_carry.steps, 0).sum(),
         "lm_loss": lm_loss,
         "q_halt_loss": q_halt_loss,
         "q_continue_loss": q_continue_loss,

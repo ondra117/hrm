@@ -163,7 +163,12 @@ def train_batch(
     )
 
     metrics = jax.tree.map(jnp.mean, metrics)
-    metrics = {f"train/{k}": v for k, v in metrics.items()}
+
+    count = jnp.maximum(metrics["count"], 1)
+    metrics = {
+        f"train/{k}": v / (1 if k.endswith("loss") else count)
+        for k, v in metrics.items()
+    }
     metrics["train/lr"] = lr_scheduler(train_state.step[0])
     return metrics, train_state, carry
 
@@ -221,7 +226,7 @@ def evaluate(
             lambda x: eo.rearrange(x, "d b ... -> (d b) ..."), (batch, preds)
         )
 
-        metrics = jax.tree.map(jnp.sum, metrics)
+        metrics = jax.tree.map(jnp.mean, metrics)
 
         set_id = set_ids[set_name]
 
