@@ -163,6 +163,7 @@ def train_batch(
     )
 
     metrics = jax.tree.map(jnp.mean, metrics)
+    metrics = {f"train/{k}": v for k, v in metrics.items()}
     metrics["train/lr"] = lr_scheduler(train_state.step[0])
     return metrics, train_state, carry
 
