@@ -294,7 +294,7 @@ def launch():
         )
     )
 
-    batch = list(train_loader)[0]
+    batch = list(train_loader)[0][1]
 
     rng_key, sub_key = jax.random.split(jax.random.PRNGKey(0))
     train_state, lr_scheduler = init_train_state(config, train_metadata, batch, sub_key)
