@@ -162,13 +162,7 @@ def train_batch(
         jax.random.split(key, jax.device_count()),
     )
 
-    metrics = jax.tree.map(jnp.sum, metrics)
-
-    count = jnp.maximum(metrics["count"], 1)
-    metrics = {
-        f"train/{k}": v / (global_batch_size if k.endswith("loss") else count)
-        for k, v in metrics.items()
-    }
+    metrics = jax.tree.map(jnp.mean, metrics)
     metrics["train/lr"] = lr_scheduler(train_state.step[0])
     return metrics, train_state, carry
 
