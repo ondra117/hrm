@@ -139,17 +139,9 @@ def train_step(train_state, carry, batch, global_batch_size, key):
     (loss, (carry, metrics)), grads = jax.value_and_grad(_step, has_aux=True)(
         train_state.params, train_state, carry, batch, global_batch_size, key
     )
-    # (loss, (carry, metrics)), grads = jax.pmap(
-    #     jax.value_and_grad(_step, has_aux=True), axis_name="devices"
-    # )(train_state.params, train_state, carry, batch, global_batch_size, key)
 
     grads = jax.lax.psum(grads, axis_name="devices")
     train_state = train_state.apply_gradients(grads=grads)
-
-    # train_state = jax.pmap(
-    #     lambda x, s: s.apply_gradients(grads=jax.lax.psum(x, axis_name="devices")),
-    #     axis_name="devices",
-    # )(grads, train_state)
 
     return train_state, carry, metrics, loss
 
@@ -165,19 +157,6 @@ def train_batch(
     lr_scheduler,
     key: Array,
 ):
-    if carry is None:
-        carry = jax.pmap(
-            lambda *args, **kwargs: train_state.apply_fn(
-                *args,
-                **kwargs,
-                method=HierarchicalReasoningModel_ACTV1.initial_carry,
-            ),
-            axis_name="devices",
-        )(
-            {"params": train_state.params, "constants": train_state.constants},
-            batch=common_utils.shard(batch),
-        )
-
     train_state, carry, metrics, loss = train_step(
         train_state,
         carry,
@@ -206,8 +185,6 @@ def evaluate(
 ):
     apply_fn = jax.pmap(model_and_loss, axis_name="devices")
     set_ids = {k: idx for idx, k in enumerate(eval_metadata.sets)}
-
-    # all_preds = {}
 
     metric_values = None
     metric_global_batch_size = [0 for _ in range(len(set_ids))]
@@ -248,19 +225,11 @@ def evaluate(
                     carry.current_data,
                 )
 
-        # preds = {k: preds[k] for k in config.eval_save_outputs if k in preds}
-
         batch, preds = jax.tree.map(
             lambda x: eo.rearrange(x, "d b ... -> (d b) ..."), (batch, preds)
         )
 
         metrics = jax.tree.map(jnp.sum, metrics)
-
-        # for collection in (batch, preds):
-        #     for k, v in collection.items():
-        #         if k in config.eval_save_outputs:
-        #             all_preds.setdefault(k, [])
-        #             all_preds[k].append(v)
 
         set_id = set_ids[set_name]
 
@@ -316,9 +285,6 @@ def launch():
         global_batch_size=config.global_batch_size,
     )
 
-    train_state = None
-    lr_scheduler = None
-
     progress_bar = tqdm.tqdm(
         total=int(
             config.epochs
@@ -327,23 +293,31 @@ def launch():
             / config.global_batch_size
         )
     )
+
+    batch = list(train_loader)[0]
+
+    rng_key, sub_key = jax.random.split(jax.random.PRNGKey(0))
+    train_state, lr_scheduler = init_train_state(config, train_metadata, batch, sub_key)
+    train_state = jax_utils.replicate(train_state)
+
+    carry = jax.pmap(
+        lambda *args, **kwargs: train_state.apply_fn(
+            *args,
+            **kwargs,
+            method=HierarchicalReasoningModel_ACTV1.initial_carry,
+        ),
+        axis_name="devices",
+    )(
+        {"params": train_state.params, "constants": train_state.constants},
+        batch=common_utils.shard(batch),
+    )
+
     wandb.init(project="hrm")
-
-    rng_key = jax.random.PRNGKey(0)
-
-    carry = None
 
     for _iter_id in range(total_iters):
         print(f"Epoch {_iter_id * train_epochs_per_iter}")
 
-        for set_name, batch, global_batch_size in train_loader:
-            if train_state is None:
-                rng_key, sub_key = jax.random.split(rng_key)
-                train_state, lr_scheduler = init_train_state(
-                    config, train_metadata, batch, sub_key
-                )
-                train_state = jax_utils.replicate(train_state)
-
+        for _, batch, global_batch_size in train_loader:
             rng_key, sub_key = jax.random.split(rng_key)
 
             metrics, train_state, carry = train_batch(
