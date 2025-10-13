@@ -19,14 +19,18 @@ def log_stablemax(x: Array, axis: int = -1) -> Array:
     return jnp.log(s_x / jnp.sum(s_x, axis=axis, keepdims=True))
 
 
-def stablemax_cross_entropy(logits: Array, labels: Array) -> Array:
+def stablemax_cross_entropy(
+    logits: Array, labels: Array, ignore_index: int = -100
+) -> Array:
     logprobs = log_stablemax(logits.astype(jnp.float64), axis=-1)
 
+    valid_mask = labels != ignore_index
+    transformed_labels = jnp.where(valid_mask, labels, 0)
     prediction_logprobs = jnp.take_along_axis(
-        logprobs, indices=labels.astype(jnp.uint64)[..., None], axis=-1
+        logprobs, indices=transformed_labels.astype(jnp.uint64)[..., None], axis=-1
     )[..., 0]
 
-    return -prediction_logprobs
+    return -jnp.where(valid_mask, prediction_logprobs, 0)
 
 
 def softmax_cross_entropy(logits, labels) -> Array:
