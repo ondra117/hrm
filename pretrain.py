@@ -122,8 +122,8 @@ def model_and_loss(train_state, *args, **kwargs):
     return act_loss(*train_state.apply_fn(*args, **kwargs))
 
 
-def train_step(train_state, carry, batch, global_batch_size, key):
-    def _step(params, train_state, carry, batch, global_batch_size, key):
+def train_step(train_state, carry, batch, key):
+    def _step(params, train_state, carry, batch, key):
         carry, loss, metrics, _, _ = model_and_loss(
             train_state,
             {"params": params, "constants": train_state.constants},
@@ -134,7 +134,7 @@ def train_step(train_state, carry, batch, global_batch_size, key):
         return loss, (carry, metrics)
 
     (loss, (carry, metrics)), grads = jax.value_and_grad(_step, has_aux=True)(
-        train_state.params, train_state, carry, batch, global_batch_size, key
+        train_state.params, train_state, carry, batch, key
     )
 
     grads = jax.lax.pmean(grads, axis_name="devices")
@@ -150,7 +150,6 @@ def train_batch(
     train_state: TrainState,
     carry,
     batch,
-    global_batch_size: int,
     lr_scheduler,
     key: Array,
 ):
@@ -158,7 +157,6 @@ def train_batch(
         train_state,
         carry,
         common_utils.shard(batch),
-        jax_utils.replicate(global_batch_size),
         jax.random.split(key, jax.device_count()),
     )
 
@@ -314,14 +312,13 @@ def launch():
     for _iter_id in range(total_iters):
         print(f"Epoch {_iter_id * train_epochs_per_iter}")
 
-        for _, batch, global_batch_size in train_loader:
+        for _, batch, _ in train_loader:
             rng_key, sub_key = jax.random.split(rng_key)
 
             metrics, train_state, carry = train_batch(
                 train_state,
                 carry,
                 batch,
-                global_batch_size,
                 lr_scheduler,
                 sub_key,
             )
