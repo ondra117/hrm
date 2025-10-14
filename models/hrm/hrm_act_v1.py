@@ -272,9 +272,12 @@ class HierarchicalReasoningModel_ACTV1(nn.Module):
         self, batch: dict[str, Array]
     ) -> HierarchicalReasoningModel_ACTV1Carry:
         batch_size = batch["inputs"].shape[0]
+        seq_size = batch["inputs"].shape[1]
 
         return HierarchicalReasoningModel_ACTV1Carry(
-            inner_carry=eo.repeat(self.inner.get_carry(), "... -> b ...", b=batch_size),
+            inner_carry=eo.repeat(
+                self.inner.get_carry(), "... -> b s ...", b=batch_size, s=seq_size
+            ),
             steps=jnp.zeros((batch_size,), dtype=jnp.int32),
             halted=jnp.ones((batch_size,), dtype=jnp.bool_),
             current_data=jax.tree.map(jnp.zeros_like, batch),
