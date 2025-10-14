@@ -272,7 +272,7 @@ class HierarchicalReasoningModel_ACTV1(nn.Module):
         self, batch: dict[str, Array]
     ) -> HierarchicalReasoningModel_ACTV1Carry:
         batch_size = batch["inputs"].shape[0]
-        seq_size = batch["inputs"].shape[1]
+        seq_size = batch["inputs"].shape[1] + self.inner.puzzle_emb_len
 
         return HierarchicalReasoningModel_ACTV1Carry(
             inner_carry=[
