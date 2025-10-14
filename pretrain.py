@@ -184,7 +184,6 @@ def evaluate(
     metric_values = None
     metric_global_batch_size = [0 for _ in range(len(set_ids))]
 
-    carry = None
     for set_name, batch, global_batch_size in tqdm.tqdm(list(eval_loader)):
         batch = common_utils.shard(batch)
 

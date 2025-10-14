@@ -4,6 +4,7 @@ import jax.numpy as jnp
 from flax.struct import dataclass
 from pydantic import BaseModel
 import jax
+import einops as eo
 
 from models.layers import (
     Attention,
@@ -17,14 +18,8 @@ from models.common import trunc_normal_init_
 
 
 @dataclass
-class HierarchicalReasoningModel_ACTV1InnerCarry:
-    z_H: Array
-    z_L: Array
-
-
-@dataclass
 class HierarchicalReasoningModel_ACTV1Carry:
-    inner_carry: HierarchicalReasoningModel_ACTV1InnerCarry
+    inner_carry: list[Array]
 
     steps: Array
     halted: Array
@@ -218,49 +213,22 @@ class HierarchicalReasoningModel_ACTV1_Inner(nn.Module):
 
         return self.embed_scale * embedding
 
-    def empty_carry(
-        self, batch_size: int
-    ) -> HierarchicalReasoningModel_ACTV1InnerCarry:
-        return HierarchicalReasoningModel_ACTV1InnerCarry(
-            z_H=jnp.empty(
-                (
-                    batch_size,
-                    self.config.seq_len + self.puzzle_emb_len,
-                    self.config.hidden_size,
-                ),
-                dtype=self.forward_dtype,
-            ),
-            z_L=jnp.empty(
-                (
-                    batch_size,
-                    self.config.seq_len + self.puzzle_emb_len,
-                    self.config.hidden_size,
-                ),
-                dtype=self.forward_dtype,
-            ),
-        )
+    def get_carry(self):
+        return [self.H_init.value, self.L_init.value]
 
-    def reset_carry(
-        self, reset_flag: Array, carry: HierarchicalReasoningModel_ACTV1InnerCarry
-    ) -> HierarchicalReasoningModel_ACTV1InnerCarry:
-        return HierarchicalReasoningModel_ACTV1InnerCarry(
-            z_H=jnp.where(reset_flag[..., None, None], self.H_init.value, carry.z_H),
-            z_L=jnp.where(reset_flag[..., None, None], self.L_init.value, carry.z_L),
-        )
-
-    def get_puzzle_emb(self) -> Array:
-        return self.puzzle_emb
+    # def get_puzzle_emb(self) -> Array:
+    #     return self.puzzle_emb
 
     def __call__(
-        self, carry: HierarchicalReasoningModel_ACTV1InnerCarry, batch: dict[str, Array]
-    ) -> tuple[HierarchicalReasoningModel_ACTV1InnerCarry, Array, tuple[Array, Array]]:
+        self, carry: list[Array], batch: dict[str, Array]
+    ) -> tuple[list[Array], Array, tuple[Array, Array]]:
         cos_sin = self.rotary_emb() if self.config.pos_encodings == "rope" else None
 
         input_embeddings = self._input_embeddings(
             batch["inputs"], batch["puzzle_identifiers"]
         )
 
-        z_H, z_L = carry.z_H, carry.z_L
+        z_H, z_L = carry
         for _H_step in range(self.config.H_cycles):
             for _L_step in range(self.config.L_cycles):
                 if not (
@@ -278,9 +246,7 @@ class HierarchicalReasoningModel_ACTV1_Inner(nn.Module):
         z_L = self.L_level(z_L, z_H + input_embeddings, cos_sin=cos_sin)
         z_H = self.H_level(z_H, z_L, cos_sin=cos_sin)
 
-        new_carry = HierarchicalReasoningModel_ACTV1InnerCarry(
-            z_H=jax.lax.stop_gradient(z_H), z_L=jax.lax.stop_gradient(z_L)
-        )
+        new_carry = [jax.lax.stop_gradient(z_H), jax.lax.stop_gradient(z_L)]
 
         output = self.lm_head(z_H)[:, self.puzzle_emb_len :]
 
@@ -295,9 +261,9 @@ class HierarchicalReasoningModel_ACTV1(nn.Module):
     def setup(self):
         self.inner = HierarchicalReasoningModel_ACTV1_Inner(self.config)
 
-    @property
-    def puzzle_emb(self) -> Array:
-        return self.inner.get_puzzle_emb()
+    # @property
+    # def puzzle_emb(self) -> Array:
+    #     return self.inner.get_puzzle_emb()
 
     def init_model(self, batch: Array, **kwargs):
         return self(carry=self.initial_carry(batch=batch), batch=batch, **kwargs)
@@ -308,7 +274,7 @@ class HierarchicalReasoningModel_ACTV1(nn.Module):
         batch_size = batch["inputs"].shape[0]
 
         return HierarchicalReasoningModel_ACTV1Carry(
-            inner_carry=self.inner.empty_carry(batch_size),
+            inner_carry=eo.repeat(self.inner.get_carry(), "... -> b ...", b=batch_size),
             steps=jnp.zeros((batch_size,), dtype=jnp.int32),
             halted=jnp.ones((batch_size,), dtype=jnp.bool_),
             current_data=jax.tree.map(jnp.zeros_like, batch),
@@ -320,7 +286,10 @@ class HierarchicalReasoningModel_ACTV1(nn.Module):
         batch: dict[str, Array],
         key: Array,
     ) -> dict[HierarchicalReasoningModel_ACTV1Carry, dict[str, Array]]:
-        new_inner_carry = self.inner.reset_carry(carry.halted, carry.inner_carry)
+        new_inner_carry = [
+            jnp.where(carry.halted[..., None, None], nc, c)
+            for nc, c in zip(self.inner.get_carry(), carry.inner_carry)
+        ]
 
         new_steps = jnp.where(carry.halted, 0, carry.steps)
 
